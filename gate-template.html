@@ -1,0 +1,184 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Состав на игру — HC Dinamo Minsk</title>
+<style>
+  :root {
+    --bg: #05080B;
+    --panel: #0B1015;
+    --panel-2: #10171E;
+    --line: #1C2731;
+    --text: #EAF2F8;
+    --muted: #7C8B99;
+    --blue: #45B7E8;
+    --red: #E85C5C;
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; }
+  body {
+    margin: 0;
+    background: var(--bg); color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+    display: flex; align-items: center; justify-content: center;
+    overflow: hidden;
+  }
+  body::before {
+    content: ''; position: fixed; inset: 0; pointer-events: none;
+    background: radial-gradient(ellipse 70% 55% at 50% 32%, rgba(69, 183, 232, .09), transparent 65%);
+  }
+  #gate {
+    position: relative; width: 340px; max-width: calc(100vw - 40px);
+    text-align: center;
+    transition: opacity .35s ease, transform .35s ease;
+  }
+  #gate.unlocked { opacity: 0; transform: translateY(-14px); pointer-events: none; }
+  .logo-wrap {
+    width: 148px; height: 148px; margin: 0 auto 26px;
+    display: flex; align-items: center; justify-content: center;
+    filter: drop-shadow(0 0 34px rgba(69, 183, 232, .30));
+  }
+  .logo-wrap img { max-width: 100%; max-height: 100%; }
+  h1 {
+    margin: 0 0 6px; font-size: 24px; font-weight: 800;
+    letter-spacing: .06em; text-transform: uppercase;
+  }
+  .sub {
+    margin: 0 0 30px; font-size: 11px; letter-spacing: .26em;
+    text-transform: uppercase; color: var(--muted);
+  }
+  .sub b { color: var(--blue); font-weight: 650; }
+  input[type=password] {
+    width: 100%; background: var(--panel-2); border: 1px solid var(--line); color: var(--text);
+    border-radius: 8px; padding: 13px 14px; font-size: 15px; letter-spacing: .12em;
+    outline: none; text-align: center;
+    transition: border-color .15s ease;
+  }
+  input[type=password]:focus { border-color: var(--blue); }
+  input[type=password]::placeholder { color: var(--muted); letter-spacing: .06em; }
+  button {
+    width: 100%; margin-top: 10px; padding: 13px 14px;
+    background: var(--blue); color: #04141C; border: 0; border-radius: 8px;
+    font-size: 12px; font-weight: 800; letter-spacing: .18em; text-transform: uppercase;
+    cursor: pointer; transition: filter .15s ease, transform .05s ease;
+  }
+  button:hover { filter: brightness(1.08); }
+  button:active { transform: translateY(1px); }
+  button[disabled] { opacity: .55; cursor: default; }
+  .err {
+    min-height: 18px; margin: 12px 0 0; font-size: 12px; color: var(--red);
+    letter-spacing: .04em; opacity: 0; transition: opacity .2s ease;
+  }
+  .err.show { opacity: 1; }
+  @keyframes shake {
+    0%, 100% { transform: translateX(0); }
+    20% { transform: translateX(-7px); } 40% { transform: translateX(7px); }
+    60% { transform: translateX(-5px); } 80% { transform: translateX(5px); }
+  }
+  #gate.shake { animation: shake .4s ease; }
+  .credit {
+    margin: 34px 0 0; font-size: 11px; color: var(--muted); line-height: 1.5;
+  }
+  #app-frame {
+    position: fixed; inset: 0; width: 100%; height: 100%;
+    border: 0; display: none; background: var(--bg);
+  }
+</style>
+</head>
+<body>
+
+<div id="gate">
+  <div class="logo-wrap"><img src="__LOGO__" alt="HC Dinamo Minsk"></div>
+  <h1>Состав на игру</h1>
+  <p class="sub"><b>HC Dinamo Minsk</b> · закрытый доступ</p>
+  <form id="form" autocomplete="off">
+    <input type="password" id="pwd" placeholder="Пароль" autofocus>
+    <button type="submit" id="btn">Войти</button>
+  </form>
+  <p class="err" id="err">Неверный пароль</p>
+  <p class="credit">Генератор постеров состава · игра / тренировка / меньшинство</p>
+</div>
+
+<iframe id="app-frame" title="Состав на игру"></iframe>
+
+<script>
+(function () {
+  var PAYLOAD = "__PAYLOAD__";
+  var STORE_KEY = "lp-gate-key";
+
+  var gate = document.getElementById('gate');
+  var form = document.getElementById('form');
+  var pwd = document.getElementById('pwd');
+  var btn = document.getElementById('btn');
+  var err = document.getElementById('err');
+  var frame = document.getElementById('app-frame');
+
+  function b64ToBytes(b64) {
+    var bin = atob(b64);
+    var bytes = new Uint8Array(bin.length);
+    for (var i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+    return bytes;
+  }
+
+  function unlock(html) {
+    gate.classList.add('unlocked');
+    setTimeout(function () {
+      gate.style.display = 'none';
+      frame.style.display = 'block';
+      frame.srcdoc = html;
+    }, 320);
+  }
+
+  function fail() {
+    btn.disabled = false;
+    err.classList.add('show');
+    gate.classList.remove('shake');
+    void gate.offsetWidth;
+    gate.classList.add('shake');
+    pwd.select();
+  }
+
+  async function tryPassword(password) {
+    var data = b64ToBytes(PAYLOAD);
+    var salt = data.slice(0, 16);
+    var iv = data.slice(16, 28);
+    var ct = data.slice(28);
+    var keyMaterial = await crypto.subtle.importKey(
+      'raw', new TextEncoder().encode(password), 'PBKDF2', false, ['deriveKey']
+    );
+    var key = await crypto.subtle.deriveKey(
+      { name: 'PBKDF2', salt: salt, iterations: 310000, hash: 'SHA-256' },
+      keyMaterial, { name: 'AES-GCM', length: 256 }, false, ['decrypt']
+    );
+    var plain = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: iv }, key, ct);
+    return new TextDecoder().decode(plain);
+  }
+
+  form.addEventListener('submit', function (e) {
+    e.preventDefault();
+    var password = pwd.value;
+    if (!password) return;
+    btn.disabled = true;
+    err.classList.remove('show');
+    tryPassword(password).then(function (html) {
+      try { sessionStorage.setItem(STORE_KEY, password); } catch (_) {}
+      unlock(html);
+    }).catch(function () {
+      fail();
+    });
+  });
+
+  try {
+    var saved = sessionStorage.getItem(STORE_KEY);
+    if (saved) {
+      tryPassword(saved).then(function (html) { unlock(html); }).catch(function () {
+        try { sessionStorage.removeItem(STORE_KEY); } catch (_) {}
+      });
+    }
+  } catch (_) {}
+})();
+</script>
+
+</body>
+</html>
