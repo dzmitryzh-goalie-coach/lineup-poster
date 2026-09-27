@@ -3,3 +3,9 @@ app.html
 # Исходник логотипа
 logo-src.png
 .DS_Store
+
+# доступ: логины и мастер-ключ сайта — только локально
+users.json
+master.key
+index.test.html
+users.test.json

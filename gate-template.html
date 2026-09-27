@@ -45,18 +45,20 @@
     letter-spacing: .06em; text-transform: uppercase;
   }
   .sub {
-    margin: 0 0 30px; font-size: 11px; letter-spacing: .26em;
+    margin: 0 0 28px; font-size: 11px; letter-spacing: .26em;
     text-transform: uppercase; color: var(--muted);
   }
   .sub b { color: var(--blue); font-weight: 650; }
-  input[type=password] {
+  input {
     width: 100%; background: var(--panel-2); border: 1px solid var(--line); color: var(--text);
-    border-radius: 8px; padding: 13px 14px; font-size: 15px; letter-spacing: .12em;
-    outline: none; text-align: center;
-    transition: border-color .15s ease;
+    border-radius: 8px; padding: 13px 14px; font-size: 15px; outline: none;
+    text-align: center; transition: border-color .15s ease;
   }
-  input[type=password]:focus { border-color: var(--blue); }
-  input[type=password]::placeholder { color: var(--muted); letter-spacing: .06em; }
+  input + input { margin-top: 8px; }
+  #login { letter-spacing: .06em; }
+  input[type=password] { letter-spacing: .12em; }
+  input:focus { border-color: var(--blue); }
+  input::placeholder { color: var(--muted); letter-spacing: .06em; }
   button {
     width: 100%; margin-top: 10px; padding: 13px 14px;
     background: var(--blue); color: #04141C; border: 0; border-radius: 8px;
@@ -78,8 +80,9 @@
   }
   #gate.shake { animation: shake .4s ease; }
   .credit {
-    margin: 34px 0 0; font-size: 11px; color: var(--muted); line-height: 1.5;
+    margin: 26px 0 0; font-size: 11px; color: var(--muted); line-height: 1.6;
   }
+  .credit b { color: var(--text); font-weight: 600; }
   #app-frame {
     position: fixed; inset: 0; width: 100%; height: 100%;
     border: 0; display: none; background: var(--bg);
@@ -93,11 +96,12 @@
   <h1>Состав на игру</h1>
   <p class="sub"><b>HC Dinamo Minsk</b> · закрытый доступ</p>
   <form id="form" autocomplete="off">
-    <input type="password" id="pwd" placeholder="Пароль" autofocus>
+    <input type="text" id="login" placeholder="Логин" autocomplete="username" autocapitalize="off" spellcheck="false" autofocus>
+    <input type="password" id="pwd" placeholder="Пароль" autocomplete="current-password">
     <button type="submit" id="btn">Войти</button>
   </form>
-  <p class="err" id="err">Неверный пароль</p>
-  <p class="credit">Генератор постеров состава · игра / тренировка / меньшинство</p>
+  <p class="err" id="err">Неверный логин или пароль</p>
+  <p class="credit">У каждого логина <b>своя база сохранений</b><br>Генератор постеров состава · игра / тренировка / меньшинство<br>логинов в сборке: <b>__COUNT__</b></p>
 </div>
 
 <iframe id="app-frame" title="Состав на игру"></iframe>
@@ -105,20 +109,79 @@
 <script>
 (function () {
   var PAYLOAD = "__PAYLOAD__";
-  var STORE_KEY = "lp-gate-key";
+  var USERS = __USERS__;
+  var ITER = __ITER__;
+  var SESSION_KEY = 'lp-session';
+  var LAST_LOGIN_KEY = 'lp-last-login';
 
   var gate = document.getElementById('gate');
   var form = document.getElementById('form');
+  var loginEl = document.getElementById('login');
   var pwd = document.getElementById('pwd');
   var btn = document.getElementById('btn');
   var err = document.getElementById('err');
   var frame = document.getElementById('app-frame');
+  var enc = new TextEncoder();
 
   function b64ToBytes(b64) {
     var bin = atob(b64);
     var bytes = new Uint8Array(bin.length);
     for (var i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
     return bytes;
+  }
+
+  function hexToBytes(hex) {
+    var out = new Uint8Array(hex.length / 2);
+    for (var i = 0; i < out.length; i++) out[i] = parseInt(hex.substr(i * 2, 2), 16);
+    return out;
+  }
+
+  function bytesToHex(bytes) {
+    var s = '';
+    for (var i = 0; i < bytes.length; i++) s += bytes[i].toString(16).padStart(2, '0');
+    return s;
+  }
+
+  // пароль → ключ, которым завёрнут мастер-ключ сайта
+  async function unwrapMaster(user, password) {
+    var material = await crypto.subtle.importKey('raw', enc.encode(password), 'PBKDF2', false, ['deriveKey']);
+    var wrapKey = await crypto.subtle.deriveKey(
+      { name: 'PBKDF2', salt: hexToBytes(user.salt), iterations: ITER, hash: 'SHA-256' },
+      material, { name: 'AES-GCM', length: 256 }, false, ['decrypt']
+    );
+    var plain = await crypto.subtle.decrypt(
+      { name: 'AES-GCM', iv: hexToBytes(user.iv) }, wrapKey, b64ToBytes(user.wrapped)
+    );
+    return new Uint8Array(plain);
+  }
+
+  // пароль → ключ базы сохранений этого логина (другая соль, никому больше не подходит)
+  async function deriveSaveKey(user, password) {
+    var material = await crypto.subtle.importKey('raw', enc.encode(password), 'PBKDF2', false, ['deriveBits']);
+    var bits = await crypto.subtle.deriveBits(
+      { name: 'PBKDF2', salt: hexToBytes(user.saltSave), iterations: ITER, hash: 'SHA-256' },
+      material, 256
+    );
+    return bytesToHex(new Uint8Array(bits));
+  }
+
+  async function decryptApp(masterBytes) {
+    var data = b64ToBytes(PAYLOAD);
+    var key = await crypto.subtle.importKey('raw', masterBytes, 'AES-GCM', false, ['decrypt']);
+    var plain = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: data.slice(0, 12) }, key, data.slice(12));
+    return new TextDecoder().decode(plain);
+  }
+
+  // приложение получает логин и ключ хранилища; сам пароль в iframe не уходит.
+  // подстановка идёт по метке в начале скрипта приложения — она раньше его кода
+  var SESSION_MARK = '/*__LP_SESSION__*/ window.__LP__ = window.__LP__ || null;';
+
+  function withSession(html, session) {
+    var payload = JSON.stringify({
+      user: session.user, name: session.name || '', inherit: !!session.inherit, sk: session.sk
+    }).replace(/</g, '\\u003c');
+    if (html.indexOf(SESSION_MARK) < 0) throw new Error('в сборке приложения нет метки сессии');
+    return html.replace(SESSION_MARK, 'window.__LP__ = ' + payload + ';');
   }
 
   function unlock(html) {
@@ -139,44 +202,75 @@
     pwd.select();
   }
 
-  async function tryPassword(password) {
-    var data = b64ToBytes(PAYLOAD);
-    var salt = data.slice(0, 16);
-    var iv = data.slice(16, 28);
-    var ct = data.slice(28);
-    var keyMaterial = await crypto.subtle.importKey(
-      'raw', new TextEncoder().encode(password), 'PBKDF2', false, ['deriveKey']
-    );
-    var key = await crypto.subtle.deriveKey(
-      { name: 'PBKDF2', salt: salt, iterations: 310000, hash: 'SHA-256' },
-      keyMaterial, { name: 'AES-GCM', length: 256 }, false, ['decrypt']
-    );
-    var plain = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: iv }, key, ct);
-    return new TextDecoder().decode(plain);
+  async function signIn(session) {
+    var html = await decryptApp(hexToBytes(session.km));
+    unlock(withSession(html, session));
+  }
+
+  function remember(session) {
+    try { sessionStorage.setItem(SESSION_KEY, JSON.stringify(session)); } catch (_) {}
+    try { localStorage.setItem(LAST_LOGIN_KEY, session.user); } catch (_) {}
+  }
+
+  function logout() {
+    try { sessionStorage.removeItem(SESSION_KEY); } catch (_) {}
+    location.reload();
+  }
+
+  async function tryCredentials(login, password) {
+    var user = null;
+    for (var i = 0; i < USERS.length; i++) {
+      if (USERS[i].login.toLowerCase() === login) { user = USERS[i]; break; }
+    }
+    // для несуществующего логина считаем то же самое на первом пользователе:
+    // ошибка одинаковая, время ответа не выдаёт, есть ли такой логин
+    var target = user || USERS[0];
+    if (!target) throw new Error('нет логинов в сборке');
+    var km = await unwrapMaster(target, password);
+    var sk = await deriveSaveKey(target, password);
+    if (!user) throw new Error('неверный логин');
+    var session = { user: user.login, name: user.name, inherit: user.inherit, km: bytesToHex(km), sk: sk };
+    await signIn(session);
+    remember(session);
   }
 
   form.addEventListener('submit', function (e) {
     e.preventDefault();
+    var login = loginEl.value.trim().toLowerCase();
     var password = pwd.value;
-    if (!password) return;
+    if (!login || !password) { pwd.focus(); return; }
     btn.disabled = true;
     err.classList.remove('show');
-    tryPassword(password).then(function (html) {
-      try { sessionStorage.setItem(STORE_KEY, password); } catch (_) {}
-      unlock(html);
-    }).catch(function () {
-      fail();
-    });
+    tryCredentials(login, password).catch(function () { fail(); });
   });
 
+  window.addEventListener('message', function (e) {
+    if (e.data && e.data.type === 'lp-logout') logout();
+  });
+
+  // тот же логин, что и в этой вкладке: повторный вход без пароля
   try {
-    var saved = sessionStorage.getItem(STORE_KEY);
+    var saved = sessionStorage.getItem(SESSION_KEY);
     if (saved) {
-      tryPassword(saved).then(function (html) { unlock(html); }).catch(function () {
-        try { sessionStorage.removeItem(STORE_KEY); } catch (_) {}
-      });
+      var session = JSON.parse(saved);
+      var known = USERS.some(function (u) { return u.login === session.user; });
+      if (known && session.km && session.sk) {
+        signIn(session).catch(function () { logout(); });
+      } else {
+        sessionStorage.removeItem(SESSION_KEY);
+      }
+    } else {
+      var last = localStorage.getItem(LAST_LOGIN_KEY);
+      if (last) loginEl.value = last;
     }
   } catch (_) {}
+
+  if (!sessionStorage.getItem(SESSION_KEY)) {
+    try {
+      var lastLogin = localStorage.getItem(LAST_LOGIN_KEY);
+      if (lastLogin) loginEl.value = lastLogin;
+    } catch (_) {}
+  }
 })();
 </script>
 
