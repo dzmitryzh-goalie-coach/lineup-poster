@@ -7,6 +7,9 @@
  *   node add_user.mjs <логин> --inherit        # перенять сохранения этого браузера (для своего логина)
  *   node add_user.mjs <логин> --remove         # удалить логин
  *   node add_user.mjs --list                   # список логинов
+ *   node add_user.mjs --generate 10 --prefix trener
+ *        # 10 логинов со случайными паролями; пароли пишутся в logins.txt,
+ *        # в чат/лог не печатаются (--to <файл> меняет имя файла)
  *
  * Для скриптов: LP_PASSWORD='...' node add_user.mjs <логин>
  *
@@ -15,7 +18,7 @@
  * Без пароля users.json бесполезен, но слабый пароль подбирается оффлайн —
  * берите длинный.
  */
-import { readFileSync, writeFileSync, existsSync, chmodSync } from 'node:fs';
+import { readFileSync, writeFileSync, appendFileSync, existsSync, chmodSync } from 'node:fs';
 import { pbkdf2Sync, randomBytes, createCipheriv } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
@@ -37,6 +40,20 @@ const flagValue = name => {
 };
 
 const hex = buf => Buffer.from(buf).toString('hex');
+
+// без похожих друг на друга знаков (0/O, 1/l/I) — пароль диктуют голосом
+const PW_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnpqrstuvwxyz23456789';
+
+function randomPassword(len) {
+  let out = '';
+  while (out.length < len) {
+    for (const b of randomBytes(len)) {
+      if (b < 224) out += PW_ALPHABET[b % PW_ALPHABET.length];   // 224 = 4 * 56, без смещения
+      if (out.length === len) break;
+    }
+  }
+  return out;
+}
 const b64 = buf => Buffer.from(buf).toString('base64');
 
 function loadUsers() {
@@ -123,6 +140,38 @@ async function main() {
   if (flags.includes('--list')) {
     if (!users.length) { console.log('логинов нет'); return; }
     users.forEach(u => console.log('  ' + u.login + (u.name ? ' — ' + u.name : '') + (u.inherit ? ' (перенимает старые сохранения)' : '')));
+    return;
+  }
+
+  if (flags.includes('--generate')) {
+    const count = parseInt(flagValue('--generate'), 10) || 0;
+    if (count < 1 || count > 100) {
+      console.error('Укажите количество: node add_user.mjs --generate 10 [--prefix trener] [--to logins.txt]');
+      process.exit(1);
+    }
+    const prefix = flagValue('--prefix') || 'trener';
+    const to = flagValue('--to') || 'logins.txt';
+    const fresh = [];
+    for (let i = 1; i <= count; i++) {
+      let login = prefix + i;
+      while (users.some(u => u.login === login) || fresh.some(f => f.login === login)) login = prefix + i + 'x';
+      const password = randomPassword(14);
+      users.push(userRecord(login, password, { name: '', inherit: false }));
+      fresh.push({ login, password });
+    }
+    saveUsers(users);
+    const stamp = new Date().toISOString().slice(0, 10);
+    appendFileSync(join(root, to), [
+      `# Пароли логинов сайта lineup-poster — ${stamp}`,
+      '# Отдайте каждому его логин и пароль и удалите этот файл.',
+      '# Восстановить пароль нельзя: в users.json лежит только мастер-ключ, завёрнутый паролем.',
+      ...fresh.map(f => `${f.login}\t${f.password}`),
+      '',
+    ].join('\n'));
+    try { chmodSync(join(root, to), 0o600); } catch (_) {}
+    console.log(`добавлено логинов: ${fresh.length} — ${fresh.map(f => f.login).join(', ')}`);
+    console.log(`пароли записаны в ${to}; логинов в сборке теперь ${users.length}`);
+    console.log('пересоберите сайт: node build_gate.mjs');
     return;
   }
 
